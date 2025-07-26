@@ -39,10 +39,7 @@ jobs:
           # Read the diff from the file.
           DIFF_CONTENT=$(cat diff.txt)
 
-          # Escape the diff content so it can be safely embedded in the JSON payload.
-          JSON_ESCAPED_DIFF=$(echo "$DIFF_CONTENT" | awk -v ORS='\\n' '1' | sed 's/"/\\"/g; s/\\/\\\\/g')
-
-          # The prompt is the most important part. We instruct the AI on how to behave.
+          # Construct the full prompt that will be sent to the AI.
           PROMPT="""
           You are an expert code reviewer for a software development team.
           Your task is to review the following code changes from a pull request.
@@ -52,30 +49,18 @@ jobs:
 
           Here is the git diff for you to review:
           ---
-          $JSON_ESCAPED_DIFF
+          $DIFF_CONTENT
           ---
           """
           
-          # Create the full JSON payload. This avoids the "Argument list too long" error
-          # by not expanding the large diff directly in the curl command.
-          JSON_PAYLOAD=$(cat <<EOF
-          {
-            "contents": [
-              {
-                "parts": [
-                  {
-                    "text": "$PROMPT"
-                  }
-                ]
-              }
-            ]
-          }
-          EOF
-          )
+          # Use jq to safely construct the JSON payload.
+          # This is the correct way to handle multi-line strings and special characters
+          # and it permanently fixes the "Invalid JSON payload" error.
+          JSON_PAYLOAD=$(jq -n --arg prompt_text "$PROMPT" \
+            '{ "contents": [ { "parts": [ { "text": $prompt_text } ] } ] }')
 
           # Make the API call to Gemini.
           # We pipe the JSON payload to curl's stdin and use -d @- to read from it.
-          # This is the correct way to handle large data payloads and fixes the error.
           API_RESPONSE=$(echo "$JSON_PAYLOAD" | curl -s -X POST -H "Content-Type: application/json" \
             -d @- \
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${{ secrets.GEMINI_API_KEY }}")
