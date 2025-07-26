@@ -65,10 +65,8 @@ jobs:
             -d @- \
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${{ secrets.GEMINI_API_KEY }}")
           
-          # Store the raw response in an environment variable for debugging
-          echo "API_RESPONSE_RAW<<EOF" >> $GITHUB_ENV
-          echo "$API_RESPONSE" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
+          # Store the raw response in a file for safer debugging
+          echo "$API_RESPONSE" > api_response.json
 
           # Extract the text content from the JSON response
           REVIEW_TEXT=$(echo "$API_RESPONSE" | jq -r '.candidates[0].content.parts[0].text')
@@ -81,12 +79,12 @@ jobs:
           # Store the final review comment in a file to be used in the next step
           echo "$REVIEW_TEXT" > review_comment.md
 
-      # Step 4: DEBUGGING STEP
-      # This new step will print the raw API response to the logs so we can see the exact error.
+      # Step 4: DEBUGGING STEP - Safely display API response
       - name: Debug API Response
         run: |
           echo "--- RAW API RESPONSE ---"
-          echo "${{ env.API_RESPONSE_RAW }}"
+          cat api_response.json
+          echo ""
           echo "------------------------"
 
       # Step 5: Post the review as a comment on the Pull Request
