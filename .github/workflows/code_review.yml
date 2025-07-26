@@ -1,0 +1,94 @@
+# .github/workflows/code_review.yml
+
+name: AI Code Review
+
+# This action will trigger on every pull request that targets the 'main' branch
+on:
+  pull_request:
+    branches:
+      - main
+
+# Permissions needed for the job to run
+permissions:
+  contents: read      # To check out the code
+  pull-requests: write # To write comments on the PR
+
+jobs:
+  review:
+    runs-on: ubuntu-latest # Use the latest version of Ubuntu for the runner
+    steps:
+      # Step 1: Check out the repository code
+      # This allows the action to access your code
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          # We need to fetch the full history to be able to diff against the base branch
+          fetch-depth: 0
+
+      # Step 2: Set up the GitHub CLI
+      # We'll use this to post the comment back to the PR
+      - name: Setup GitHub CLI
+        run: |
+          # This is a standard way to install the gh cli on the runner
+          type -p curl >/dev/null || (sudo apt update && sudo apt install curl -y)
+          curl -fsSL https://cli.github.com/packages/github-cli-2.14.1-linux-amd64.tar.gz | sudo tar -xzv -C /usr/local/bin - --strip-components=1
+
+      # Step 3: Get the code changes (the "diff")
+      # This is the crucial part where we isolate what needs to be reviewed
+      - name: Get Pull Request Diff
+        id: get_diff
+        run: |
+          # This git command gets the difference between the PR branch and the main branch
+          # and stores it in an environment variable for the next step.
+          # The output is redirected to a file to handle multi-line diffs.
+          git diff origin/main...HEAD > diff.txt
+          echo "diff_content=$(cat diff.txt)" >> $GITHUB_ENV
+
+      # Step 4: Run the AI Review using Gemini
+      - name: Run AI Code Review
+        id: ai_review
+        env:
+          # The GITHUB_TOKEN is automatically provided by GitHub Actions
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The prompt is the most important part. We instruct the AI on how to behave.
+          PROMPT="""
+          You are an expert code reviewer for a software development team.
+          Your task is to review the following code changes from a pull request.
+          Please provide a concise, high-level summary of the changes, followed by specific, actionable feedback.
+          Focus on potential bugs, performance issues, security vulnerabilities, and violations of best practices.
+          Do NOT comment on minor style issues. Format your entire response as clean Markdown.
+
+          Here is the git diff for you to review:
+          ---
+          ${{ env.diff_content }}
+          ---
+          """
+
+          # Make the API call to Gemini
+          # We use curl to make a direct HTTP request to the Gemini API endpoint
+          API_RESPONSE=$(curl -s -H 'Content-Type: application/json' \
+            -d "{\"contents\":[{\"parts\":[{\"text\": \"$PROMPT\"}]}]}" \
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${{ secrets.GEMINI_API_KEY }}")
+
+          # Extract the text content from the JSON response
+          REVIEW_TEXT=$(echo "$API_RESPONSE" | jq -r '.candidates[0].content.parts[0].text')
+
+          # If the review text is empty, provide a default message
+          if [ -z "$REVIEW_TEXT" ]; then
+            REVIEW_TEXT="Gemini API did not return a review. This might be due to an API error or an empty diff."
+          fi
+
+          # Store the final review comment in a file to be used in the next step
+          echo "$REVIEW_TEXT" > review_comment.md
+
+
+      # Step 5: Post the review as a comment on the Pull Request
+      - name: Post Review Comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Use the GitHub CLI to post the contents of our review file as a PR comment
+          gh pr comment $PR_NUMBER --body-file review_comment.md
+
