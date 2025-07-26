@@ -25,32 +25,29 @@ jobs:
           # We need to fetch the full history to be able to diff against the base branch
           fetch-depth: 0
 
-      # Step 2: Set up the GitHub CLI
-      # We'll use this to post the comment back to the PR
-      - name: Setup GitHub CLI
-        run: |
-          # This is a standard way to install the gh cli on the runner
-          type -p curl >/dev/null || (sudo apt update && sudo apt install curl -y)
-          curl -fsSL https://cli.github.com/packages/github-cli-2.14.1-linux-amd64.tar.gz | sudo tar -xzv -C /usr/local/bin - --strip-components=1
-
-      # Step 3: Get the code changes (the "diff")
+      # Step 2: Get the code changes (the "diff")
       # This is the crucial part where we isolate what needs to be reviewed
       - name: Get Pull Request Diff
         id: get_diff
         run: |
           # This git command gets the difference between the PR branch and the main branch
-          # and stores it in an environment variable for the next step.
-          # The output is redirected to a file to handle multi-line diffs.
+          # and stores it in a file that the next step will read.
           git diff origin/main...HEAD > diff.txt
-          echo "diff_content=$(cat diff.txt)" >> $GITHUB_ENV
 
-      # Step 4: Run the AI Review using Gemini
+      # Step 3: Run the AI Review using Gemini
       - name: Run AI Code Review
         id: ai_review
         env:
           # The GITHUB_TOKEN is automatically provided by GitHub Actions
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Read the diff from the file. This is safer than using environment variables for large diffs.
+          DIFF_CONTENT=$(cat diff.txt)
+
+          # Escape the diff content so it can be safely embedded in the JSON payload.
+          # This handles quotes, backslashes, and newlines.
+          JSON_ESCAPED_DIFF=$(echo "$DIFF_CONTENT" | awk -v ORS='\\n' '1' | sed 's/"/\\"/g; s/\\/\\\\/g')
+
           # The prompt is the most important part. We instruct the AI on how to behave.
           PROMPT="""
           You are an expert code reviewer for a software development team.
@@ -61,7 +58,7 @@ jobs:
 
           Here is the git diff for you to review:
           ---
-          ${{ env.diff_content }}
+          $JSON_ESCAPED_DIFF
           ---
           """
 
@@ -74,8 +71,8 @@ jobs:
           # Extract the text content from the JSON response
           REVIEW_TEXT=$(echo "$API_RESPONSE" | jq -r '.candidates[0].content.parts[0].text')
 
-          # If the review text is empty, provide a default message
-          if [ -z "$REVIEW_TEXT" ]; then
+          # If the review text is empty or null, provide a default message
+          if [ -z "$REVIEW_TEXT" ] || [ "$REVIEW_TEXT" == "null" ]; then
             REVIEW_TEXT="Gemini API did not return a review. This might be due to an API error or an empty diff."
           fi
 
@@ -83,7 +80,8 @@ jobs:
           echo "$REVIEW_TEXT" > review_comment.md
 
 
-      # Step 5: Post the review as a comment on the Pull Request
+      # Step 4: Post the review as a comment on the Pull Request
+      # The GitHub CLI (gh) is pre-installed on the runner, so no setup is needed.
       - name: Post Review Comment
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -91,4 +89,3 @@ jobs:
         run: |
           # Use the GitHub CLI to post the contents of our review file as a PR comment
           gh pr comment $PR_NUMBER --body-file review_comment.md
-
