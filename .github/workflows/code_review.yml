@@ -18,7 +18,6 @@ jobs:
     runs-on: ubuntu-latest # Use the latest version of Ubuntu for the runner
     steps:
       # Step 1: Check out the repository code
-      # This allows the action to access your code
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
@@ -26,7 +25,6 @@ jobs:
           fetch-depth: 0
 
       # Step 2: Get the code changes (the "diff")
-      # This is the crucial part where we isolate what needs to be reviewed
       - name: Get Pull Request Diff
         id: get_diff
         run: |
@@ -81,6 +79,11 @@ jobs:
           API_RESPONSE=$(echo "$JSON_PAYLOAD" | curl -s -X POST -H "Content-Type: application/json" \
             -d @- \
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${{ secrets.GEMINI_API_KEY }}")
+          
+          # Store the raw response in an environment variable for debugging
+          echo "API_RESPONSE_RAW<<EOF" >> $GITHUB_ENV
+          echo "$API_RESPONSE" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
 
           # Extract the text content from the JSON response
           REVIEW_TEXT=$(echo "$API_RESPONSE" | jq -r '.candidates[0].content.parts[0].text')
@@ -93,9 +96,15 @@ jobs:
           # Store the final review comment in a file to be used in the next step
           echo "$REVIEW_TEXT" > review_comment.md
 
+      # Step 4: DEBUGGING STEP
+      # This new step will print the raw API response to the logs so we can see the exact error.
+      - name: Debug API Response
+        run: |
+          echo "--- RAW API RESPONSE ---"
+          echo "${{ env.API_RESPONSE_RAW }}"
+          echo "------------------------"
 
-      # Step 4: Post the review as a comment on the Pull Request
-      # The GitHub CLI (gh) is pre-installed on the runner, so no setup is needed.
+      # Step 5: Post the review as a comment on the Pull Request
       - name: Post Review Comment
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
